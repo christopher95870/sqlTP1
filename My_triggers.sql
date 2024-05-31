@@ -1,31 +1,18 @@
 -- Triggers
     --Question 1 : ALL_WORKERS_ELAPSED
-CREATE OR REPLACE TRIGGER TRG_INSERT_ALL_WORKERS_ELAPSED
+CREATE OR REPLACE TRIGGER insert_worker_all_workers_elapsed
 INSTEAD OF INSERT ON ALL_WORKERS_ELAPSED
 FOR EACH ROW
-DECLARE
-    v_factory_id NUMBER;
 BEGIN
-    -- Vérifie dans quelle usine doit être inséré le travailleur
-    SELECT factory_id INTO v_factory_id
-    FROM FACTORIES
-    WHERE main_location = :NEW.main_location;
-    
-    -- Insère le travailleur dans la table appropriée en fonction de l'usine
-    IF v_factory_id = 1 THEN
-        INSERT INTO WORKERS_FACTORY_1 (first_name, last_name, age, first_day)
-        VALUES (:NEW.first_name, :NEW.last_name, :NEW.age, :NEW.first_day);
-    ELSIF v_factory_id = 2 THEN
-        INSERT INTO WORKERS_FACTORY_2 (first_name, last_name, age, start_date)
-        VALUES (:NEW.first_name, :NEW.last_name, :NEW.age, :NEW.first_day);
+    IF :NEW.start_date IS NOT NULL THEN
+        -- Insertion dans WORKERS_FACTORY_2
+        INSERT INTO WORKERS_FACTORY_2 (first_name, last_name, start_date)
+        VALUES (:NEW.first_name, :NEW.last_name, :NEW.start_date);
     ELSE
-        -- Si l'usine n'existe pas, il y a une erreur
-        RAISE_APPLICATION_ERROR(-20001, 'Factory does not exist');
+        -- Insertion dans WORKERS_FACTORY_1
+        INSERT INTO WORKERS_FACTORY_1 (first_name, last_name, age, first_day, last_day)
+        VALUES (:NEW.first_name, :NEW.last_name, :NEW.age, SYSDATE, NULL);
     END IF;
-EXCEPTION
-    WHEN OTHERS THEN
-        -- En cas d'erreur, affiche le message d'erreur
-        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
 END;
 /
     --Question 2 : AUDIT_ROBOT
