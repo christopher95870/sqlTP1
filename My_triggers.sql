@@ -1,103 +1,81 @@
-1. 
-CREATE TRIGGER InterceptInsert
-INSTEAD OF INSERT
-ON ALL_WORKERS_ELAPSED
+-- Triggers
+    --Question 1 : ALL_WORKERS_ELAPSED
+CREATE OR REPLACE TRIGGER TRG_INSERT_ALL_WORKERS_ELAPSED
+INSTEAD OF INSERT ON ALL_WORKERS_ELAPSED
 FOR EACH ROW
-AS
+DECLARE
+    v_factory_id NUMBER;
 BEGIN
-    -- Insérer dans la bonne table
-    INSERT INTO YourCorrectTable (worker_id, ...) -- Remplacez "YourCorrectTable" par le nom de la table correcte
-    VALUES (NEW.worker_id, ...); -- Remplacez "worker_id" et "..." par les colonnes appropriées
-END;
-GO
-
--- Création du déclencheur pour lever des erreurs lors des opérations de mise à jour
-CREATE TRIGGER UpdateError
-ON ALL_WORKERS_ELAPSED
-INSTEAD OF UPDATE
-AS
-BEGIN
-    -- Lever une erreur
-    RAISEERROR('Modification interdite', 16, 1);
-END;
-GO
-
--- Création du déclencheur pour lever des erreurs lors des opérations de suppression
-CREATE TRIGGER DeleteError
-ON ALL_WORKERS_ELAPSED
-INSTEAD OF DELETE
-AS
-BEGIN
-    -- Lever une erreur
-    RAISEERROR('Suppression interdite', 16, 1);
-END;
-GO
-
--------------------------------------------------------
-
-2. 
-CREATE TRIGGER RecordRobotCreation
-AFTER INSERT
-ON VotreTableDeRobots -- Remplacez "VotreTableDeRobots" par le nom de votre table de robots
-FOR EACH ROW
-BEGIN
-    INSERT INTO AUDIT_ROBOT (robot_id, date_added)
-    VALUES (NEW.robot_id, GETDATE()); -- Utilisation de GETDATE() pour obtenir la date actuelle
-END;
-
------------------------------------------------------------
-
-3. 
-CREATE TRIGGER CheckFactoryCount
-INSTEAD OF UPDATE
-ON ROBOTS_FACTORIES
-AS
-BEGIN
-    DECLARE @FactoryCount INT;
-    DECLARE @WorkerFactoryCount INT;
-
-    -- Compter le nombre d'usines dans la table FACTORIES
-    SELECT @FactoryCount = COUNT(*) FROM FACTORIES;
-
-    -- Compter le nombre de tables respectant le format WORKERS_FACTORY_<N>
-    SELECT @WorkerFactoryCount = COUNT(*)
-    FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_NAME LIKE 'WORKERS_FACTORY_%';
-
-    -- Vérifier si les compteurs sont égaux
-    IF @FactoryCount = @WorkerFactoryCount
-    BEGIN
-        -- Autoriser la mise à jour des données dans la vue ROBOTS_FACTORIES
-        UPDATE ROBOTS_FACTORIES SET ...; -- Mettez à jour les données comme requis
-    END
+    -- Vérifie dans quelle usine doit être inséré le travailleur
+    SELECT factory_id INTO v_factory_id
+    FROM FACTORIES
+    WHERE main_location = :NEW.main_location;
+    
+    -- Insère le travailleur dans la table appropriée en fonction de l'usine
+    IF v_factory_id = 1 THEN
+        INSERT INTO WORKERS_FACTORY_1 (first_name, last_name, age, first_day)
+        VALUES (:NEW.first_name, :NEW.last_name, :NEW.age, :NEW.first_day);
+    ELSIF v_factory_id = 2 THEN
+        INSERT INTO WORKERS_FACTORY_2 (first_name, last_name, age, start_date)
+        VALUES (:NEW.first_name, :NEW.last_name, :NEW.age, :NEW.first_day);
     ELSE
-    BEGIN
-        -- Empêcher la mise à jour des données et lever une erreur
-        RAISEERROR('Impossible de mettre à jour les données tant que les conditions ne sont pas remplies.', 16, 1);
-    END
+        -- Si l'usine n'existe pas, il y a une erreur
+        RAISE_APPLICATION_ERROR(-20001, 'Factory does not exist');
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- En cas d'erreur, affiche le message d'erreur
+        DBMS_OUTPUT.PUT_LINE('Error: ' || SQLERRM);
 END;
-
---------------------------------------------------------------------
-
-4. 
-ALTER TABLE WORKERS
-ADD COLUMN time_spent_in_factory INT; -- Adapter le type de données en fonction de vos besoins
-
--- Créer un déclencheur AFTER INSERT/UPDATE pour calculer la durée du temps passé dans l'usine
-CREATE TRIGGER CalculateTimeSpent
-AFTER INSERT, UPDATE
-ON WORKERS
+/
+    --Question 2 : AUDIT_ROBOT
+CREATE OR REPLACE TRIGGER TRG_INSERT_AUDIT_ROBOT
+AFTER INSERT ON ROBOTS
 FOR EACH ROW
 BEGIN
-    -- Vérifier si la date de départ a été ajoutée
-    IF NEW.departure_date IS NOT NULL THEN
-        -- Calculer la durée du temps passé dans l'usine
-        DECLARE time_spent INT;
-        SET time_spent = DATEDIFF(NEW.departure_date, NEW.entry_date); -- Calcul de la différence en jours
-
-        -- Mettre à jour la nouvelle colonne avec la durée calculée
-        UPDATE WORKERS
-        SET time_spent_in_factory = time_spent
-        WHERE worker_id = NEW.worker_id;
-    END IF;
+    -- Insérer la nouvelle entrée dans la table AUDIT_ROBOT avec la date d'ajout actuelle
+    INSERT INTO AUDIT_ROBOT (robot_id, created_at) VALUES (:NEW.id, SYSDATE);
 END;
+/
+    --Question 3 :
+CREATE OR REPLACE TRIGGER TRG_PREVENT_MODIFICATION_ROBOTS_FACTORIES
+BEFORE INSERT OR UPDATE OR DELETE ON ROBOTS_FACTORIES
+FOR EACH ROW
+DECLARE
+    v_num_factories NUMBER;
+    v_num_workers_tables NUMBER;
+BEGIN
+    -- Compter le nombre d'usines dans la table FACTORIES
+    SELECT COUNT(*) INTO v_num_factories FROM FACTORIES;
+
+    -- Compter le nombre de tables de travailleurs respectant le format WORKERS_FACTORY_<N>
+    SELECT COUNT(*) INTO v_num_workers_tables
+    FROM user_tables
+    WHERE table_name LIKE 'WORKERS_FACTORY\_%' ESCAPE '\';
+    --Question 4 : 
+CREATE OR REPLACE TRIGGER TRG_CALCULATE_WORKER_DURATION
+BEFORE INSERT OR UPDATE OF last_day ON WORKERS_FACTORY_1
+FOR EACH ROW
+DECLARE
+    v_duration NUMBER;
+BEGIN
+    -- Calculer la durée du temps passé dans l'usine
+    IF :NEW.last_day IS NOT NULL AND :OLD.last_day IS NULL THEN
+        v_duration := ROUND((:NEW.last_day - :NEW.first_day), 2);
+    ELSE
+        v_duration := NULL;
+    END IF;
+    
+    -- Vérifier si la colonne pour stocker la durée du temps passé existe
+    BEGIN
+        EXECUTE IMMEDIATE 'ALTER TABLE WORKERS_FACTORY_1 ADD (time_spent NUMBER(10,2))';
+    EXCEPTION
+        WHEN OTHERS THEN
+            NULL; -- Ignorer l'erreur si la colonne existe déjà
+    END;
+    
+    -- Assigner la valeur de la durée du temps passé à la nouvelle colonne time_spent
+    EXECUTE IMMEDIATE 'UPDATE WORKERS_FACTORY_1 SET time_spent = :1 WHERE id = :2'
+        USING v_duration, :NEW.id;
+END;
+/
